@@ -3,7 +3,7 @@
  * Plugin Name: PlugShip Receiver
  * Plugin URI: https://github.com/plugship-receiver
  * Description: Companion plugin for the plugship CLI. Adds a REST endpoint to receive and install plugin ZIP files.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: PlugShip
  * License: MIT
  * Requires at least: 5.8
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'PLUGSHIP_VERSION', '1.0.0' );
+define( 'PLUGSHIP_VERSION', '1.0.1' );
 define( 'PLUGSHIP_MAX_UPLOAD_SIZE', 50 * 1024 * 1024 ); // 50 MB
 
 add_action( 'rest_api_init', function () {
@@ -43,6 +43,35 @@ function plugship_status() {
 }
 
 function plugship_deploy( WP_REST_Request $request ) {
+	// Suppress ALL PHP error output for the entire function
+	// to prevent HTML errors from corrupting JSON response
+	$original_display_errors = ini_get( 'display_errors' );
+	$original_error_reporting = error_reporting();
+	ini_set( 'display_errors', 0 );
+
+	// Capture any errors that happen
+	$captured_errors = array();
+	set_error_handler( function ( $errno, $errstr, $errfile, $errline ) use ( &$captured_errors ) {
+		$captured_errors[] = $errstr;
+		return true; // Prevent default error handler
+	} );
+
+	$response = plugship_do_deploy( $request, $captured_errors );
+
+	// Restore error handling
+	restore_error_handler();
+	ini_set( 'display_errors', $original_display_errors );
+	error_reporting( $original_error_reporting );
+
+	// Clean any stray output that leaked through
+	while ( ob_get_level() > 0 ) {
+		ob_end_clean();
+	}
+
+	return $response;
+}
+
+function plugship_do_deploy( WP_REST_Request $request, &$captured_errors ) {
 	$files = $request->get_file_params();
 
 	if ( empty( $files['plugin'] ) ) {
@@ -137,9 +166,11 @@ function plugship_deploy( WP_REST_Request $request ) {
 	$skin     = new WP_Ajax_Upgrader_Skin();
 	$upgrader = new Plugin_Upgrader( $skin );
 
+	ob_start();
 	$result = $upgrader->install( $tmp_path, array(
 		'overwrite_package' => true,
 	) );
+	ob_end_clean();
 
 	@unlink( $tmp_path );
 
@@ -165,22 +196,51 @@ function plugship_deploy( WP_REST_Request $request ) {
 	$plugin_file = $upgrader->plugin_info();
 	$plugin_data = array();
 	$activated   = false;
+	$activation_error = null;
 
 	if ( $plugin_file ) {
 		$plugin_data = get_plugin_data( WP_PLUGIN_DIR . '/' . $plugin_file );
 
-		$activate = $request->get_param( 'activate' );
-		if ( $activate !== 'false' && $activate !== false ) {
-			$activate_result = activate_plugin( $plugin_file );
-			$activated       = ! is_wp_error( $activate_result );
+		// Check if plugin is already active (auto-activated during install)
+		$activated = is_plugin_active( $plugin_file );
+
+		// If not active and activation requested, try to activate
+		if ( ! $activated ) {
+			$activate = $request->get_param( 'activate' );
+			if ( $activate !== 'false' && $activate !== false ) {
+				// Clear any errors captured so far (from install phase)
+				$errors_before = count( $captured_errors );
+
+				ob_start();
+				$activate_result = activate_plugin( $plugin_file );
+				ob_end_clean();
+
+				if ( is_wp_error( $activate_result ) ) {
+					$activation_error = $activate_result->get_error_message();
+				} else {
+					$activated = is_plugin_active( $plugin_file );
+					if ( ! $activated ) {
+						// Activation returned no error but plugin isn't active
+						$new_errors = array_slice( $captured_errors, $errors_before );
+						$activation_error = ! empty( $new_errors )
+							? implode( '; ', $new_errors )
+							: 'Plugin activation failed silently.';
+					}
+				}
+			}
 		}
 	}
 
+	// Collect any PHP warnings/errors that occurred
+	$warnings = ! empty( $captured_errors ) ? implode( '; ', array_unique( $captured_errors ) ) : null;
+
 	return new WP_REST_Response( array(
-		'success'   => true,
-		'plugin'    => $plugin_file,
-		'name'      => $plugin_data['Name'] ?? '',
-		'version'   => $plugin_data['Version'] ?? '',
-		'activated' => $activated,
+		'success'          => true,
+		'plugin'           => $plugin_file,
+		'name'             => $plugin_data['Name'] ?? '',
+		'version'          => $plugin_data['Version'] ?? '',
+		'activated'        => $activated,
+		'activation_error' => $activation_error,
+		'warnings'         => $warnings,
 	), 200 );
 }
