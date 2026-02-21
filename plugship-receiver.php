@@ -14,6 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+define( 'PLUGSHIP_VERSION', '1.0.0' );
+define( 'PLUGSHIP_MAX_UPLOAD_SIZE', 50 * 1024 * 1024 ); // 50 MB
+
 add_action( 'rest_api_init', function () {
 	register_rest_route( 'plugship/v1', '/status', array(
 		'methods'             => 'GET',
@@ -35,9 +38,7 @@ function plugship_check_permissions() {
 function plugship_status() {
 	return new WP_REST_Response( array(
 		'status'  => 'ok',
-		'version' => '1.0.0',
-		'wp'      => get_bloginfo( 'version' ),
-		'php'     => PHP_VERSION,
+		'version' => PLUGSHIP_VERSION,
 	), 200 );
 }
 
@@ -62,8 +63,19 @@ function plugship_deploy( WP_REST_Request $request ) {
 		);
 	}
 
+	// Validate file size.
+	$file_size = filesize( $file['tmp_name'] );
+	if ( $file_size === false || $file_size > PLUGSHIP_MAX_UPLOAD_SIZE ) {
+		return new WP_Error(
+			'file_too_large',
+			sprintf( 'File exceeds maximum upload size of %d MB.', PLUGSHIP_MAX_UPLOAD_SIZE / 1024 / 1024 ),
+			array( 'status' => 400 )
+		);
+	}
+
+	// Validate MIME type.
 	$mime = mime_content_type( $file['tmp_name'] );
-	if ( ! in_array( $mime, array( 'application/zip', 'application/x-zip-compressed', 'application/octet-stream' ), true ) ) {
+	if ( ! in_array( $mime, array( 'application/zip', 'application/x-zip-compressed' ), true ) ) {
 		return new WP_Error(
 			'invalid_file_type',
 			'Uploaded file is not a valid ZIP archive.',
@@ -71,13 +83,49 @@ function plugship_deploy( WP_REST_Request $request ) {
 		);
 	}
 
+	// Validate ZIP integrity and inspect contents.
+	$zip = new ZipArchive();
+	$zip_result = $zip->open( $file['tmp_name'], ZipArchive::RDONLY );
+	if ( $zip_result !== true ) {
+		return new WP_Error(
+			'invalid_zip',
+			'Uploaded file is not a valid ZIP archive.',
+			array( 'status' => 400 )
+		);
+	}
+
+	// Check for path traversal and symlinks in ZIP entries.
+	for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+		$entry = $zip->getNameIndex( $i );
+
+		if ( strpos( $entry, '..' ) !== false || strpos( $entry, '~' ) === 0 ) {
+			$zip->close();
+			return new WP_Error(
+				'malicious_zip',
+				'ZIP archive contains invalid path entries.',
+				array( 'status' => 400 )
+			);
+		}
+
+		// Reject absolute paths.
+		if ( preg_match( '#^[/\\\\]#', $entry ) ) {
+			$zip->close();
+			return new WP_Error(
+				'malicious_zip',
+				'ZIP archive contains absolute path entries.',
+				array( 'status' => 400 )
+			);
+		}
+	}
+	$zip->close();
+
 	require_once ABSPATH . 'wp-admin/includes/file.php';
 	require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
 	require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
 	require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
-	// Move uploaded file to a temporary location WP can access.
-	$tmp_path = wp_tempnam( $file['name'] );
+	// Use a safe generated name instead of user-supplied filename.
+	$tmp_path = wp_tempnam( 'plugship_' . wp_generate_password( 8, false ) . '.zip' );
 	if ( ! move_uploaded_file( $file['tmp_name'], $tmp_path ) ) {
 		return new WP_Error(
 			'move_failed',
