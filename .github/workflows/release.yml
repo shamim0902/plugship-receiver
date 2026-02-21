@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from plugin header
+        id: version
+        run: |
+          VERSION=$(grep -oP 'Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' plugship-receiver.php)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create plugin ZIP
+        run: |
+          mkdir plugship-receiver
+          cp plugship-receiver.php plugship-receiver/
+          [ -f README.md ] && cp README.md plugship-receiver/
+          [ -f LICENSE ] && cp LICENSE plugship-receiver/
+          zip -r plugship-receiver.zip plugship-receiver/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: |
+            ## PlugShip Receiver v${{ steps.version.outputs.version }}
+
+            ### Installation
+            1. Download `plugship-receiver.zip` below
+            2. Go to **Plugins > Add New > Upload Plugin** in WordPress admin
+            3. Upload the ZIP and activate
+          files: plugship-receiver.zip
+          make_latest: true
