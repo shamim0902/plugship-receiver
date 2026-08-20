@@ -25,6 +25,7 @@ jobs:
         run: |
           mkdir plugship-receiver
           cp plugship-receiver.php plugship-receiver/
+          cp -R includes plugship-receiver/
           [ -f README.md ] && cp README.md plugship-receiver/
           [ -f LICENSE ] && cp LICENSE plugship-receiver/
           zip -r plugship-receiver.zip plugship-receiver/

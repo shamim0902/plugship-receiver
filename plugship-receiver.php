@@ -3,7 +3,7 @@
  * Plugin Name: PlugShip Receiver
  * Plugin URI: https://github.com/plugship-receiver
  * Description: Companion plugin for the plugship CLI. Adds a REST endpoint to receive and install plugin ZIP files.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: PlugShip
  * License: MIT
  * Requires at least: 5.8
@@ -14,8 +14,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'PLUGSHIP_VERSION', '1.0.0' );
+define( 'PLUGSHIP_VERSION', '1.1.0' );
 define( 'PLUGSHIP_MAX_UPLOAD_SIZE', 50 * 1024 * 1024 ); // 50 MB
+define( 'PLUGSHIP_GITHUB_REPO', 'shamim0902/plugship-receiver' );
+
+require_once __DIR__ . '/includes/GitHubUpdater.php';
+
+add_action( 'init', function () {
+	if ( is_admin() || wp_doing_cron() ) {
+		new \PlugShipReceiver\GitHubUpdater( __FILE__, PLUGSHIP_GITHUB_REPO, PLUGSHIP_VERSION );
+	}
+} );
 
 add_action( 'rest_api_init', function () {
 	register_rest_route( 'plugship/v1', '/status', array(
