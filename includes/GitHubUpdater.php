@@ -32,6 +32,7 @@ class GitHubUpdater {
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'checkUpdate' ) );
 		add_action( 'delete_site_transient_update_plugins', array( $this, 'deleteTransient' ) );
 		add_filter( 'plugins_api', array( $this, 'pluginInfo' ), 10, 3 );
+		add_filter( 'plugin_row_meta', array( $this, 'addCheckUpdateLink' ), 10, 2 );
 		remove_action( 'after_plugin_row_' . $this->pluginFile, 'wp_plugin_update_row' );
 		add_action( 'after_plugin_row_' . $this->pluginFile, array( $this, 'showUpdateNotification' ), 10, 2 );
 	}
@@ -72,6 +73,18 @@ class GitHubUpdater {
 		$transientData->checked[ $this->pluginFile ] = $this->version;
 
 		return $transientData;
+	}
+
+	public function addCheckUpdateLink( $links, $file ) {
+		if ( $this->pluginFile !== $file || ! current_user_can( 'update_plugins' ) ) {
+			return $links;
+		}
+
+		$checkUpdateUrl = esc_url( admin_url( 'plugins.php?plugship-check-update=' . time() ) );
+
+		$links['check_update'] = '<a style="color: #583fad;font-weight: 600;" href="' . $checkUpdateUrl . '" aria-label="' . esc_attr__( 'Check Update' ) . '">' . esc_html__( 'Check Update' ) . '</a>';
+
+		return $links;
 	}
 
 	public function showUpdateNotification( $file, $plugin ) {
